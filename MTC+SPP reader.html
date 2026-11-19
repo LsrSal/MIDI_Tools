@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MIDI Time Code & SPP Reader</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body, html {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            background-color: #090a0f;
+            color: #f3f4f6;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            user-select: none;
+        }
+        .mono-font {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        }
+        select option {
+            background-color: #131622;
+            color: #ffffff;
+            padding: 8px;
+        }
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #131622;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #2d3748;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #4a5568;
+        }
+        #appContainer {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .toolbar {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            background-color: rgba(19, 22, 34, 0.95);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid #1e2436;
+            padding: 12px 16px;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            z-index: 20;
+            transition: transform 0.3s ease, opacity 0.3s ease;
+        }
+        .toolbar.hidden {
+            transform: translateY(-100%);
+            opacity: 0;
+            pointer-events: none;
+        }
+        .btn {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 8px 14px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: transform 0.1s, background 0.2s;
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+        }
+        .btn:active {
+            transform: scale(0.95);
+        }
+        .btn-secondary {
+            background: #1e293b;
+            color: #cbd5e1;
+            border: 1px solid #1e2436;
+            box-shadow: none;
+        }
+        .btn-secondary:hover {
+            background: #334155;
+            color: #ffffff;
+        }
+        .select-box {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #131622;
+            border: 1px solid #1e2436;
+            border-radius: 8px;
+            padding: 6px 12px;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.4);
+        }
+        .select-box select {
+            background: transparent;
+            color: #ffffff;
+            border: none;
+            font-size: 12px;
+            outline: none;
+            cursor: pointer;
+            max-width: 160px;
+        }
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #131622;
+            border: 1px solid #1e2436;
+            border-radius: 8px;
+            padding: 6px 12px;
+        }
+        .dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background-color: #f59e0b;
+        }
+        .dot.active {
+            background-color: #10b981;
+            box-shadow: 0 0 10px rgba(16, 185, 129, 0.6);
+        }
+        .dot.pulse {
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.9); }
+            100% { opacity: 1; transform: scale(1); }
+        }
+        #showUiBtn {
+            position: absolute;
+            top: 16px;
+            left: 16px;
+            z-index: 30;
+            background: rgba(19, 22, 34, 0.95);
+            backdrop-filter: blur(8px);
+            border: 1px solid #1e2436;
+            color: #f3f4f6;
+            width: 40px;
+            height: 40px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+        }
+        #showUiBtn.visible {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="appContainer">
+        <header id="toolbar" class="toolbar">
+            <div style="display: flex; align-items: center; gap: 12px;">
+                <div style="width: 38px; height: 38px; border-radius: 10px; background: linear-gradient(135deg, #2563eb, #4f46e5); display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(37,99,235,0.3);">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h3l3-9 4 18 3-9h3"/></svg>
+                </div>
+                <div>
+                    <h1 style="font-size: 14px; font-weight: 700; color: #ffffff; display: flex; align-items: center; gap: 8px;">
+                        MTC & SPP Reader <span style="font-size: 10px; padding: 2px 6px; border-radius: 9999px; background: rgba(59,130,246,0.2); color: #60a5fa; border: 1px solid rgba(59,130,246,0.3);">v4.0</span>
+                    </h1>
+                    <p style="font-size: 11px; color: #94a3b8;">Zero-Dependency Self-Contained MIDI Reader</p>
+                </div>
+            </div>
+
+            <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px;">
+                <!-- MIDI Port Selector -->
+                <div class="select-box">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2"><path d="M12 2v6m0 8v6M4.93 10.93l4.24 4.24m5.66 0l4.24-4.24"/></svg>
+                    <select id="midiPortSelect">
+                        <option value="" disabled selected>Loading MIDI ports...</option>
+                    </select>
+                </div>
+
+                <!-- Display Mode Selector -->
+                <div class="select-box">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                    <select id="displayModeSelect">
+                        <option value="both">MTC + SPP</option>
+                        <option value="mtc">MTC Only</option>
+                        <option value="spp">SPP Only</option>
+                    </select>
+                </div>
+
+                <!-- Connection Status -->
+                <div class="status-badge">
+                    <span id="statusDot" class="dot pulse"></span>
+                    <span id="statusText" style="font-size: 11px; font-weight: 500; color: #cbd5e1;">Waiting for MIDI...</span>
+                </div>
+
+                <!-- FPS Counter -->
+                <div class="status-badge">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                    <div style="font-size: 11px; display: flex; align-items: center; gap: 4px;">
+                        <span style="color: #94a3b8;">FPS:</span>
+                        <span id="fpsDisplay" class="mono-font" style="font-weight: 700; color: #ffffff; width: 52px; text-align: right; display: inline-block;">00.0</span>
+                    </div>
+                </div>
+
+                <!-- Save Settings -->
+                <button id="saveSettingsBtn" class="btn">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                    <span>Save</span>
+                </button>
+
+                <!-- Hide UI Button -->
+                <button id="hideUiBtn" class="btn btn-secondary" title="Hide Toolbar">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                    <span>Hide UI</span>
+                </button>
+            </div>
+        </header>
+
+        <button id="showUiBtn" title="Show Controls">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" stroke-width="2"><path d="M12 3v18m9-9H3"/></svg>
+        </button>
+
+        <main style="flex: 1; width: 100%; height: 100%; position: relative;">
+            <canvas id="mtcCanvas"></canvas>
+        </main>
+    </div>
+
+    <script>
+        let midiAccess = null;
+        let selectedInputPortId = null;
+        let activeInput = null;
+        let currentDisplayMode = 'both';
+
+        // MTC Variables
+        let mtcHours = 0;
+        let mtcMinutes = 0;
+        let mtcSeconds = 0;
+        let mtcFrames = 0;
+        let mtcFpsType = 0;
+        let quarterFrameBuffer = new Array(8).fill(0);
+        let lastReceiveTimestamp = 0;
+        let isReceivingTimecode = false;
+        let calculatedFps = 0.0;
+        let frameTimestamps = [];
+
+        // SPP Variables
+        let sppPosition = 0;
+        let lastSppTimestamp = 0;
+        let isReceivingSpp = false;
+        let midiClockCount = 0;
+        let isPlaying = false;
+
+        // DOM Elements
+        const midiPortSelect = document.getElementById('midiPortSelect');
+        const displayModeSelect = document.getElementById('displayModeSelect');
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+        const fpsDisplay = document.getElementById('fpsDisplay');
+        const saveSettingsBtn = document.getElementById('saveSettingsBtn');
+        const toolbar = document.getElementById('toolbar');
+        const hideUiBtn = document.getElementById('hideUiBtn');
+        const showUiBtn = document.getElementById('showUiBtn');
+        const canvas = document.getElementById('mtcCanvas');
+        const ctx = canvas.getContext('2d', { alpha: false });
+
+        function loadSettings() {
+            try {
+                const savedPortId = localStorage.getItem('mtc_selected_port_id');
+                if (savedPortId) selectedInputPortId = savedPortId;
+                const savedMode = localStorage.getItem('mtc_display_mode');
+                if (savedMode) {
+                    currentDisplayMode = savedMode;
+                    displayModeSelect.value = savedMode;
+                }
+            } catch (e) {
+                console.error("Could not load local storage", e);
+            }
+        }
+
+        function saveSettings() {
+            try {
+                if (midiPortSelect.value) {
+                    localStorage.setItem('mtc_selected_port_id', midiPortSelect.value);
+                }
+                localStorage.setItem('mtc_display_mode', displayModeSelect.value);
+                showNotification("Settings saved successfully!");
+            } catch (e) {
+                console.error("Could not save settings", e);
+                showNotification("Failed to save settings.", true);
+            }
+        }
+
+        function showNotification(message, isError = false) {
+            const notif = document.createElement('div');
+            notif.style.cssText = `position: fixed; bottom: 24px; right: 24px; z-index: 50; padding: 10px 16px; border-radius: 10px; font-size: 12px; font-weight: 500; box-shadow: 0 10px 30px rgba(0,0,0,0.5); border: 1px solid ${isError ? '#991b1b' : 'rgba(59,130,246,0.5)'}; background: ${isError ? 'rgba(69,10,10,0.9)' : 'rgba(15,23,42,0.9)'}; color: ${isError ? '#fecaca' : '#bfdbfe'}; transition: opacity 0.3s;`;
+            notif.textContent = message;
+            document.body.appendChild(notif);
+            setTimeout(() => {
+                notif.style.opacity = '0';
+                setTimeout(() => notif.remove(), 300);
+            }, 3000);
+        }
+
+        async function initWebMIDI() {
+            loadSettings();
+            if (!navigator.requestMIDIAccess) {
+                updateStatus(false, "Web MIDI not supported");
+                return;
+            }
+            try {
+                midiAccess = await navigator.requestMIDIAccess({ sysex: true });
+                updatePortList();
+                midiAccess.onstatechange = () => updatePortList();
+            } catch (err) {
+                console.error("MIDI Access Error:", err);
+                updateStatus(false, "MIDI Access Denied");
+            }
+        }
+
+        function updatePortList() {
+            if (!midiAccess) return;
+            midiPortSelect.innerHTML = '';
+            const defaultOpt = document.createElement('option');
+            defaultOpt.value = "";
+            defaultOpt.disabled = true;
+            defaultOpt.text = "Select MIDI Input Port";
+            midiPortSelect.appendChild(defaultOpt);
+
+            let portFound = false;
+            let savedPortExists = false;
+
+            midiAccess.inputs.forEach((input) => {
+                const opt = document.createElement('option');
+                opt.value = input.id;
+                opt.text = input.name || `MIDI Port ${input.id}`;
+                if (input.id === selectedInputPortId) {
+                    opt.selected = true;
+                    savedPortExists = true;
+                }
+                midiPortSelect.appendChild(opt);
+                portFound = true;
+            });
+
+            if (!portFound) {
+                defaultOpt.text = "No MIDI Inputs Found";
+                updateStatus(false, "No MIDI Devices");
+                return;
+            }
+
+            if (savedPortExists && selectedInputPortId) {
+                connectToPort(selectedInputPortId);
+            } else if (midiPortSelect.options.length > 1 && !selectedInputPortId) {
+                midiPortSelect.selectedIndex = 1;
+                selectedInputPortId = midiPortSelect.value;
+                connectToPort(selectedInputPortId);
+            }
+        }
+
+        function connectToPort(portId) {
+            if (activeInput) {
+                activeInput.onmidimessage = null;
+                activeInput = null;
+            }
+            const input = midiAccess.inputs.get(portId);
+            if (input) {
+                activeInput = input;
+                activeInput.onmidimessage = handleMIDIMessage;
+                selectedInputPortId = portId;
+                updateStatus(true, `Connected: ${input.name}`);
+            } else {
+                updateStatus(false, "Port not found");
+            }
+        }
+
+        function handleMIDIMessage(event) {
+            const data = event.data;
+            const status = data[0];
+
+            if (status === 0xF1) {
+                const message = data[1];
+                const pieceIndex = (message >> 4) & 0x07;
+                const nibbleValue = message & 0x0F;
+
+                quarterFrameBuffer[pieceIndex] = nibbleValue;
+                lastReceiveTimestamp = event.receivedTime || performance.now();
+                isReceivingTimecode = true;
+
+                const now = lastReceiveTimestamp;
+                frameTimestamps.push(now);
+                frameTimestamps = frameTimestamps.filter(t => now - t < 1000);
+                calculatedFps = Math.round((frameTimestamps.length / 4) * 10) / 10;
+
+                if (pieceIndex === 7) {
+                    decodeQuarterFrameTimecode();
+                }
+            }
+            else if (status === 0xF2 && data.length >= 3) {
+                const lsb = data[1];
+                const msb = data[2];
+                sppPosition = (msb << 7) | lsb;
+                midiClockCount = 0;
+                lastSppTimestamp = event.receivedTime || performance.now();
+                isReceivingSpp = true;
+            }
+            else if (status === 0xFA) {
+                sppPosition = 0;
+                midiClockCount = 0;
+                isPlaying = true;
+                lastSppTimestamp = event.receivedTime || performance.now();
+                isReceivingSpp = true;
+            }
+            else if (status === 0xFB) {
+                isPlaying = true;
+                lastSppTimestamp = event.receivedTime || performance.now();
+                isReceivingSpp = true;
+            }
+            else if (status === 0xFC) {
+                isPlaying = false;
+            }
+            else if (status === 0xF8) {
+                if (isPlaying) {
+                    midiClockCount++;
+                    if (midiClockCount >= 6) {
+                        midiClockCount = 0;
+                        sppPosition++;
+                        lastSppTimestamp = event.receivedTime || performance.now();
+                        isReceivingSpp = true;
+                    }
+                }
+            }
+            else if (status === 0xF0 && data.length >= 10 && data[1] === 0x7F && data[3] === 0x01 && data[4] === 0x01) {
+                mtcHours = data[5] & 0x1F;
+                mtcFpsType = (data[5] >> 5) & 0x03;
+                mtcMinutes = data[6];
+                mtcSeconds = data[7];
+                mtcFrames = data[8];
+                lastReceiveTimestamp = event.receivedTime || performance.now();
+                isReceivingTimecode = true;
+            }
+        }
+
+        function decodeQuarterFrameTimecode() {
+            mtcFrames = ((quarterFrameBuffer[1] & 0x03) << 4) | quarterFrameBuffer[0];
+            mtcSeconds = ((quarterFrameBuffer[3] & 0x0F) << 4) | quarterFrameBuffer[2];
+            mtcMinutes = ((quarterFrameBuffer[5] & 0x0F) << 4) | quarterFrameBuffer[4];
+            mtcHours = ((quarterFrameBuffer[7] & 0x01) << 4) | quarterFrameBuffer[6];
+            mtcFpsType = (quarterFrameBuffer[7] >> 1) & 0x03;
+        }
+
+        function updateStatus(connected, message) {
+            if (connected) {
+                statusDot.className = "dot active";
+                statusText.textContent = message;
+            } else {
+                statusDot.className = "dot pulse";
+                statusText.textContent = message;
+            }
+        }
+
+        function resizeCanvas() {
+            const dpr = window.devicePixelRatio || 1;
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+
+            canvas.width = width * dpr;
+            canvas.height = height * dpr;
+            canvas.style.width = width + 'px';
+            canvas.style.height = height + 'px';
+
+            ctx.scale(dpr, dpr);
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        function renderLoop() {
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+
+            // Clear canvas covering entire window height
+            ctx.fillStyle = '#090a0f';
+            ctx.fillRect(0, 0, width, height);
+
+            const now = performance.now();
+            if (now - lastReceiveTimestamp > 1500) {
+                isReceivingTimecode = false;
+                calculatedFps = 0.0;
+            }
+            if (now - lastSppTimestamp > 2500) {
+                isReceivingSpp = false;
+                isPlaying = false;
+            }
+
+            drawBackgroundGrid(width, height);
+            drawDisplays(width, height);
+
+            fpsDisplay.textContent = isReceivingTimecode ? calculatedFps.toFixed(1) : "00.0";
+            requestAnimationFrame(renderLoop);
+        }
+
+        function drawBackgroundGrid(width, height) {
+            ctx.strokeStyle = isReceivingTimecode || isReceivingSpp ? 'rgba(59, 130, 246, 0.04)' : 'rgba(255, 255, 255, 0.015)';
+            ctx.lineWidth = 1;
+            const gridSize = 64;
+
+            ctx.beginPath();
+            for (let x = 0; x < width; x += gridSize) {
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, height);
+            }
+            for (let y = 0; y < height; y += gridSize) {
+                ctx.moveTo(0, y);
+                ctx.lineTo(width, y);
+            }
+            ctx.stroke();
+        }
+
+        function drawDisplays(width, height) {
+            const mode = currentDisplayMode;
+            // Canvas always occupies full window height (window.innerHeight),
+            // guaranteeing absolute dead-center positioning across the entire screen.
+            if (mode === 'mtc') {
+                drawMtcDisplay(width, height, 0, 0, width, height, true);
+            } else if (mode === 'spp') {
+                drawSppDisplay(width, height, 0, 0, width, height, true);
+            } else if (mode === 'both') {
+                const halfH = height / 2;
+                drawMtcDisplay(width, halfH, 0, 0, width, halfH, false);
+
+                ctx.strokeStyle = 'rgba(30, 36, 54, 0.4)';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(width * 0.15, halfH);
+                ctx.lineTo(width * 0.85, halfH);
+                ctx.stroke();
+
+                drawSppDisplay(width, halfH, 0, halfH, width, halfH, false);
+            }
+        }
+
+        function drawMtcDisplay(containerW, containerH, offsetX, offsetY, boxMaxW, boxMaxH, singleMode) {
+            ctx.save();
+            ctx.translate(offsetX, offsetY);
+
+            const hh = String(mtcHours).padStart(2, '0');
+            const mm = String(mtcMinutes).padStart(2, '0');
+            const ss = String(mtcSeconds).padStart(2, '0');
+            const ff = String(mtcFrames).padStart(2, '0');
+            const timeStr = `${hh}:${mm}:${ss}:${ff}`;
+
+            let fontSize = Math.min(boxMaxW / 7.5, boxMaxH / (singleMode ? 2.8 : 2.0));
+            fontSize = Math.max(fontSize, 36);
+
+            ctx.font = `700 ${fontSize}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            const centerX = boxMaxW / 2;
+            const centerY = boxMaxH / 2;
+
+            if (isReceivingTimecode) {
+                ctx.shadowColor = 'rgba(59, 130, 246, 0.6)';
+                ctx.shadowBlur = 25;
+            } else {
+                ctx.shadowColor = 'transparent';
+                ctx.shadowBlur = 0;
+            }
+
+            const metrics = ctx.measureText(timeStr);
+            const boxWidth = metrics.width + fontSize * 0.8;
+            const boxHeight = fontSize * 1.35;
+            const boxX = centerX - boxWidth / 2;
+            const boxY = centerY - boxHeight / 2;
+
+            ctx.fillStyle = 'rgba(13, 17, 28, 0.9)';
+            ctx.strokeStyle = isReceivingTimecode ? 'rgba(59, 130, 246, 0.5)' : 'rgba(30, 36, 54, 0.8)';
+            ctx.lineWidth = 2.5;
+
+            ctx.beginPath();
+            ctx.roundRect(boxX, boxY, boxWidth, boxHeight, 16);
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.fillStyle = isReceivingTimecode ? '#60a5fa' : '#94a3b8';
+            ctx.shadowColor = 'transparent';
+            ctx.fillText(timeStr, centerX, centerY);
+
+            ctx.restore();
+        }
+
+        function drawSppDisplay(containerW, containerH, offsetX, offsetY, boxMaxW, boxMaxH, singleMode) {
+            ctx.save();
+            ctx.translate(offsetX, offsetY);
+
+            const totalSixteenths = sppPosition;
+            const sixteenthsPerMeasure = 16;
+            const bar = Math.floor(totalSixteenths / sixteenthsPerMeasure) + 1;
+            const beat = Math.floor((totalSixteenths % sixteenthsPerMeasure) / 4) + 1;
+            const sixteenth = (totalSixteenths % 4) + 1;
+
+            const sppStr = `${String(bar).padStart(3, '0')}:${String(beat).padStart(1, '0')}:${String(sixteenth).padStart(1, '0')}`;
+
+            let fontSize = Math.min(boxMaxW / 5.2, boxMaxH / (singleMode ? 3.0 : 2.1));
+            fontSize = Math.max(fontSize, 40);
+
+            ctx.font = `700 ${fontSize}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            const centerX = boxMaxW / 2;
+            const centerY = boxMaxH / 2 - (singleMode ? 10 : 5);
+
+            if (isReceivingSpp) {
+                ctx.shadowColor = 'rgba(168, 85, 247, 0.6)';
+                ctx.shadowBlur = 25;
+            } else {
+                ctx.shadowColor = 'transparent';
+                ctx.shadowBlur = 0;
+            }
+
+            const metrics = ctx.measureText(sppStr);
+            const boxWidth = metrics.width + fontSize * 0.7;
+            const boxHeight = fontSize * 1.25;
+            const boxX = centerX - boxWidth / 2;
+            const boxY = centerY - boxHeight / 2;
+
+            ctx.fillStyle = 'rgba(13, 17, 28, 0.9)';
+            ctx.strokeStyle = isReceivingSpp ? 'rgba(168, 85, 247, 0.5)' : 'rgba(30, 36, 54, 0.8)';
+            ctx.lineWidth = 2.5;
+
+            ctx.beginPath();
+            ctx.roundRect(boxX, boxY, boxWidth, boxHeight, 16);
+            ctx.fill();
+            ctx.stroke();
+
+            ctx.fillStyle = isReceivingSpp ? '#d8b4fe' : '#94a3b8';
+            ctx.shadowColor = 'transparent';
+            ctx.fillText(sppStr, centerX, centerY);
+
+            ctx.restore();
+        }
+
+        midiPortSelect.addEventListener('change', (e) => connectToPort(e.target.value));
+        displayModeSelect.addEventListener('change', (e) => currentDisplayMode = e.target.value);
+        saveSettingsBtn.addEventListener('click', saveSettings);
+
+        hideUiBtn.addEventListener('click', () => {
+            toolbar.classList.add('hidden');
+            showUiBtn.classList.add('visible');
+            setTimeout(resizeCanvas, 50);
+        });
+
+        showUiBtn.addEventListener('click', () => {
+            toolbar.classList.remove('hidden');
+            showUiBtn.classList.remove('visible');
+            setTimeout(resizeCanvas, 50);
+        });
+
+        window.addEventListener('load', () => {
+            initWebMIDI();
+            requestAnimationFrame(renderLoop);
+        });
+    </script>
+</body>
+</html>

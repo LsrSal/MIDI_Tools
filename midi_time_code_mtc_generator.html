@@ -1,0 +1,1540 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MTC Sync Master — WebMIDI Timecode Generator</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Google Fonts: Inter & JetBrains Mono -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    colors: {
+                        studio: {
+                            950: '#090a0d',
+                            900: '#111318',
+                            800: '#1a1d24',
+                            700: '#262b36',
+                            600: '#373e4d',
+                        },
+                        led: {
+                            amber: '#ff9d00',
+                            red: '#ff3b30',
+                            green: '#34c759',
+                            cyan: '#00e5ff'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        /* Custom hardware styling & subtle glow effects */
+        body {
+            background-color: #090a0d;
+            color: #e2e8f0;
+            user-select: none;
+        }
+
+        .led-display-bg {
+            background: radial-gradient(circle at center, #181512 0%, #0b0a09 100%);
+            box-shadow: inset 0 4px 15px rgba(0, 0, 0, 0.9), 0 1px 0 rgba(255, 255, 255, 0.08);
+        }
+
+        .led-text-active {
+            color: #ff9d00;
+            text-shadow: 0 0 12px rgba(255, 157, 0, 0.45), 0 0 28px rgba(255, 157, 0, 0.2);
+        }
+
+        .led-text-stopped {
+            color: #d97706;
+            text-shadow: 0 0 6px rgba(217, 119, 6, 0.2);
+        }
+
+        .led-text-tod {
+            color: #00e5ff;
+            text-shadow: 0 0 12px rgba(0, 229, 255, 0.45), 0 0 28px rgba(0, 229, 255, 0.2);
+        }
+
+        .hw-panel {
+            background: linear-gradient(180deg, #181b22 0%, #12141a 100%);
+            border: 1px solid #262b36;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        }
+
+        .hw-btn {
+            transition: all 0.1s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+        }
+        .hw-btn:active:not(:disabled) {
+            transform: translateY(1px);
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+        }
+
+        /* Custom scrollbar for MIDI log */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0d0f13;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #2d3340;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #434c5e;
+        }
+
+        /* Remove number input arrows */
+        input[type=number]::-webkit-inner-spin-button, 
+        input[type=number]::-webkit-outer-spin-button { 
+            -webkit-appearance: none; 
+            margin: 0; 
+        }
+        input[type=number] {
+            -moz-appearance: textfield;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center p-3 sm:p-6 antialiased">
+
+    <!-- Main Rack Unit Container -->
+    <main class="w-full max-w-4xl hw-panel rounded-2xl overflow-hidden">
+        
+        <!-- Top Hardware Header / Status Bar -->
+        <header class="bg-studio-900 border-b border-studio-700 px-4 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-4">
+            <div class="flex items-center gap-3">
+                <!-- Rack Screw / Logo Badge -->
+                <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center shadow-lg shadow-orange-500/20 text-studio-950 font-bold font-mono text-sm">
+                    MTC
+                </div>
+                <div>
+                    <h1 class="text-base sm:text-lg font-bold tracking-tight text-white flex items-center gap-2">
+                        MTC SYNC GENERATOR
+                        <span class="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-studio-800 text-slate-400 border border-studio-700">SMPTE / MIDI</span>
+                    </h1>
+                    <p class="text-xs text-slate-400">High-Precision Quarter-Frame &amp; Full-Frame Timecode Master</p>
+                </div>
+            </div>
+
+            <!-- Live Sync & Transmit LEDs -->
+            <div class="flex items-center gap-4 bg-studio-950 px-3.5 py-2 rounded-xl border border-studio-800">
+                <div class="flex items-center gap-2">
+                    <span id="led-midi-ready" class="w-2.5 h-2.5 rounded-full bg-slate-700 transition-colors duration-150"></span>
+                    <span class="text-xs font-mono text-slate-400">MIDI</span>
+                </div>
+                <div class="w-px h-4 bg-studio-800"></div>
+                <div class="flex items-center gap-2">
+                    <span id="led-tx" class="w-2.5 h-2.5 rounded-full bg-slate-700 transition-colors duration-75"></span>
+                    <span class="text-xs font-mono text-slate-400">QF TX</span>
+                </div>
+                <div class="w-px h-4 bg-studio-800"></div>
+                <div class="flex items-center gap-2">
+                    <span id="led-sysex" class="w-2.5 h-2.5 rounded-full bg-slate-700 transition-colors duration-150"></span>
+                    <span class="text-xs font-mono text-slate-400">FULL</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Notification / Error Banner (Hidden by default) -->
+        <div id="status-banner" class="hidden px-4 sm:px-6 py-3 bg-amber-950/60 border-b border-amber-700/50 text-amber-200 text-xs sm:text-sm flex items-center justify-between gap-3">
+            <div class="flex items-center gap-2.5">
+                <svg class="w-5 h-5 text-amber-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                </svg>
+                <span id="status-banner-text">WebMIDI status message</span>
+            </div>
+            <button id="btn-retry-midi" class="px-3 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-medium text-xs border border-amber-500/40 shrink-0">
+                Enable WebMIDI
+            </button>
+        </div>
+
+        <!-- Main Body Content -->
+        <div class="p-4 sm:p-6 space-y-6">
+
+            <!-- LED Timecode Readout Screen -->
+            <section class="led-display-bg rounded-xl border border-studio-700 p-4 sm:p-7 relative overflow-hidden">
+                <!-- Top Sub-Indicators inside Screen -->
+                <div class="flex flex-wrap items-center justify-between gap-2 mb-3 text-xs font-mono">
+                    <div class="flex items-center gap-3">
+                        <span id="badge-state" class="px-2 py-0.5 rounded bg-slate-800/90 text-slate-400 border border-slate-700 font-semibold tracking-wider">
+                            STOPPED
+                        </span>
+                        <span id="badge-mode" class="text-slate-400">
+                            SOURCE: <strong class="text-slate-200">MANUAL GENERATOR</strong>
+                        </span>
+                    </div>
+                    <div class="flex items-center gap-3 text-slate-400">
+                        <span id="badge-fps">RATE: <strong class="text-amber-400">30 FPS (NDF)</strong></span>
+                        <span class="hidden sm:inline text-slate-600">|</span>
+                        <span id="badge-qf-phase" class="hidden sm:inline">QF PIECE: <strong class="text-slate-300">0/7</strong></span>
+                    </div>
+                </div>
+
+                <!-- Giant Digital Timecode Digits -->
+                <div class="flex items-center justify-center py-2 sm:py-4 overflow-x-auto">
+                    <div id="tc-display" class="font-mono text-4xl sm:text-6xl md:text-7xl font-bold tracking-wider led-text-stopped select-all">
+                        00:00:00:00
+                    </div>
+                </div>
+
+                <!-- Bottom Frame Labels -->
+                <div class="grid grid-cols-4 max-w-md mx-auto text-center text-[10px] sm:text-xs font-mono text-slate-500 tracking-widest uppercase mt-1">
+                    <span>HOURS</span>
+                    <span>MINUTES</span>
+                    <span>SECONDS</span>
+                    <span>FRAMES</span>
+                </div>
+            </section>
+
+            <!-- Configuration Grid: MIDI Port & Frame Rate / Source Mode -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
+                
+                <!-- Left Panel: MIDI Output & Frame Rate -->
+                <div class="bg-studio-900/80 border border-studio-700/80 rounded-xl p-4 sm:p-5 space-y-4">
+                    <div class="flex items-center justify-between">
+                        <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-400">1. MIDI Output &amp; Sync Rate</h2>
+                        <span id="midi-port-count" class="text-[11px] font-mono text-slate-500">0 ports</span>
+                    </div>
+
+                    <!-- MIDI Output Selector -->
+                    <div class="space-y-1.5">
+                        <label for="midi-output-select" class="block text-xs text-slate-300 font-medium">Destination MIDI Port</label>
+                        <div class="flex gap-2">
+                            <select id="midi-output-select" class="flex-1 bg-studio-950 border border-studio-700 rounded-lg px-3 py-2.5 text-sm text-white focus:outline-none focus:border-amber-500 transition-colors">
+                                <option value="">-- Requesting WebMIDI Access... --</option>
+                            </select>
+                            <button id="btn-refresh-ports" title="Refresh MIDI Ports" class="hw-btn px-3.5 py-2.5 bg-studio-800 hover:bg-studio-700 border border-studio-600 rounded-lg text-slate-200 flex items-center justify-center">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Frame Rate Selector -->
+                    <div class="space-y-1.5">
+                        <label class="block text-xs text-slate-300 font-medium">MTC Frame Rate (SMPTE Standard)</label>
+                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2" id="fps-selector-group">
+                            <button type="button" data-fps="24" class="fps-btn hw-btn py-2 px-2 rounded-lg text-xs font-mono font-semibold border border-studio-700 bg-studio-950 text-slate-400 hover:text-white">
+                                24 fps
+                            </button>
+                            <button type="button" data-fps="25" class="fps-btn hw-btn py-2 px-2 rounded-lg text-xs font-mono font-semibold border border-studio-700 bg-studio-950 text-slate-400 hover:text-white">
+                                25 fps
+                            </button>
+                            <button type="button" data-fps="29.97" class="fps-btn hw-btn py-2 px-2 rounded-lg text-xs font-mono font-semibold border border-studio-700 bg-studio-950 text-slate-400 hover:text-white">
+                                29.97 DF
+                            </button>
+                            <button type="button" data-fps="30" class="fps-btn active hw-btn py-2 px-2 rounded-lg text-xs font-mono font-semibold border border-amber-500/60 bg-amber-500/15 text-amber-400">
+                                30 NDF
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Panel: Time Source & Custom Time Entry -->
+                <div class="bg-studio-900/80 border border-studio-700/80 rounded-xl p-4 sm:p-5 space-y-4">
+                    <div class="flex items-center justify-between">
+                        <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-400">2. Timecode Source &amp; Preset</h2>
+                    </div>
+
+                    <!-- Mode Switch Tabs -->
+                    <div class="grid grid-cols-2 gap-2 p-1 bg-studio-950 rounded-xl border border-studio-800">
+                        <button type="button" id="btn-mode-manual" class="py-2 px-3 rounded-lg text-xs font-semibold transition-all bg-studio-800 text-amber-400 shadow">
+                            Custom / Manual Time
+                        </button>
+                        <button type="button" id="btn-mode-tod" class="py-2 px-3 rounded-lg text-xs font-semibold transition-all text-slate-400 hover:text-slate-200">
+                            Current Time of Day
+                        </button>
+                    </div>
+
+                    <!-- Manual Time Inputs -->
+                    <div id="manual-inputs-container" class="space-y-2 transition-opacity duration-200">
+                        <div class="flex items-center justify-between">
+                            <span class="text-xs text-slate-300 font-medium">Set Start / Locate Time</span>
+                            <button type="button" id="btn-locate-now" class="text-[11px] font-mono text-amber-400 hover:text-amber-300 underline">
+                                Send Full-Frame Locate
+                            </button>
+                        </div>
+                        <div class="grid grid-cols-4 gap-2">
+                            <div>
+                                <label for="input-hh" class="block text-[10px] font-mono text-slate-500 text-center mb-1">HH (0-23)</label>
+                                <input type="number" id="input-hh" min="0" max="23" value="00" class="w-full bg-studio-950 border border-studio-700 focus:border-amber-500 rounded-lg py-2 text-center font-mono text-base font-bold text-white focus:outline-none">
+                            </div>
+                            <div>
+                                <label for="input-mm" class="block text-[10px] font-mono text-slate-500 text-center mb-1">MM (0-59)</label>
+                                <input type="number" id="input-mm" min="0" max="59" value="00" class="w-full bg-studio-950 border border-studio-700 focus:border-amber-500 rounded-lg py-2 text-center font-mono text-base font-bold text-white focus:outline-none">
+                            </div>
+                            <div>
+                                <label for="input-ss" class="block text-[10px] font-mono text-slate-500 text-center mb-1">SS (0-59)</label>
+                                <input type="number" id="input-ss" min="0" max="59" value="00" class="w-full bg-studio-950 border border-studio-700 focus:border-amber-500 rounded-lg py-2 text-center font-mono text-base font-bold text-white focus:outline-none">
+                            </div>
+                            <div>
+                                <label for="input-ff" id="label-input-ff" class="block text-[10px] font-mono text-slate-500 text-center mb-1">FF (0-29)</label>
+                                <input type="number" id="input-ff" min="0" max="29" value="00" class="w-full bg-studio-950 border border-studio-700 focus:border-amber-500 rounded-lg py-2 text-center font-mono text-base font-bold text-white focus:outline-none">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Time of Day Info Box (Shown when TOD active) -->
+                    <div id="tod-info-container" class="hidden bg-cyan-950/30 border border-cyan-800/40 rounded-lg p-3 text-xs text-cyan-200/90 space-y-1">
+                        <div class="font-semibold text-cyan-300 flex items-center gap-1.5">
+                            <span class="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+                            Wall-Clock Real-Time Lock Active
+                        </div>
+                        <p class="text-[11px] text-slate-400 leading-relaxed">
+                            Continuously locks MTC output to your system's local clock (<span id="tod-date-str" class="font-mono text-slate-300"></span>). Press <strong>RUN</strong> to transmit live MIDI Time Code.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Panel 3: MTC Transmission & Anti-Jam Rate Control -->
+            <section class="bg-studio-900/80 border border-studio-700/80 rounded-xl p-4 sm:p-5 space-y-4">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <div class="flex items-center gap-2">
+                        <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-400">3. High-Precision Clock &amp; Hardware Lock Engine</h2>
+                        <span id="badge-clock-engine" class="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">AUDIO CLOCK + WORKER</span>
+                    </div>
+                    <!-- Live Telemetry Readout -->
+                    <div class="flex flex-wrap items-center gap-3 text-xs font-mono bg-studio-950 px-3 py-1 rounded-lg border border-studio-800">
+                        <span class="text-slate-400">INTERVAL: <strong id="telemetry-ms" class="text-amber-400">8.333 ms</strong></span>
+                        <span class="text-slate-700">|</span>
+                        <span class="text-slate-400">JITTER: <strong id="telemetry-jitter" class="text-emerald-400">±0.00 ms</strong></span>
+                        <span class="text-slate-700">|</span>
+                        <span class="text-slate-400">TX RATE: <strong id="telemetry-hz" class="text-cyan-400">0.0 Hz</strong></span>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <!-- Column 1: Clock Dispatch & Rate Mode -->
+                    <div class="space-y-1.5">
+                        <label for="tx-mode-select" class="block text-xs text-slate-300 font-medium">Hardware Lock Dispatch Mode</label>
+                        <select id="tx-mode-select" class="w-full bg-studio-950 border border-studio-700 rounded-lg px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-amber-500">
+                            <option value="hw-timestamped">1x SMPTE — Driver Timestamped (MTP_AV Lock)</option>
+                            <option value="worker-immediate">1x SMPTE — Immediate Worker Dispatch</option>
+                            <option value="qf-throttled">Custom Max Msg/Sec Cap (Hz Limiter)</option>
+                            <option value="qf-0.5x">Half Rate 0.5x (Divided Quarter-Frames)</option>
+                            <option value="sysex-periodic">Full-Frame SysEx Only (Periodic)</option>
+                        </select>
+                        <p id="tx-mode-desc" class="text-[11px] text-slate-400 leading-snug">
+                            AudioContext crystal clock pre-schedules exact DOMHighResTimeStamp packets into the OS MIDI driver.
+                        </p>
+                    </div>
+
+                    <!-- Column 2: Lookahead Window / Custom Hz Slider -->
+                    <div class="space-y-1.5">
+                        <div class="flex items-center justify-between">
+                            <label for="rate-slider" id="rate-slider-label" class="block text-xs text-slate-300 font-medium">Driver Lookahead Buffer</label>
+                            <span id="rate-slider-val" class="text-xs font-mono font-bold text-amber-400">20 ms</span>
+                        </div>
+                        <input type="range" id="rate-slider" min="5" max="50" step="1" value="20" class="w-full accent-amber-500 bg-studio-950 h-2 rounded-lg cursor-pointer">
+                        <div id="slider-scale-labels" class="flex justify-between text-[10px] font-mono text-slate-500">
+                            <span>5 ms (Tight)</span>
+                            <span>20 ms (Default)</span>
+                            <span>35 ms</span>
+                            <span>50 ms (Safe)</span>
+                        </div>
+                    </div>
+
+                    <!-- Column 3: Start SysEx & Buffer Health -->
+                    <div class="space-y-2 bg-studio-950/70 p-3 rounded-lg border border-studio-800">
+                        <div class="flex items-center justify-between gap-2">
+                            <label for="start-sysex-mode" class="text-xs text-slate-300 font-medium">Start SysEx Behavior</label>
+                            <select id="start-sysex-mode" class="bg-studio-900 border border-studio-700 rounded px-2 py-1 text-[11px] font-mono text-slate-200 focus:outline-none focus:border-amber-500">
+                                <option value="delay-40">Send + 40ms Gap (Recommended)</option>
+                                <option value="delay-100">Send + 100ms Gap (Slow HW)</option>
+                                <option value="none">QF Only (Disable Start SysEx)</option>
+                            </select>
+                        </div>
+
+                        <div class="flex items-center justify-between gap-2 pt-1.5 border-t border-studio-800/80 text-xs">
+                            <div>
+                                <span class="block text-slate-300 font-medium">Lookahead Queue Health</span>
+                                <span class="block text-[10px] text-slate-500">Web Audio + 2ms Worker PLL</span>
+                            </div>
+                            <span id="telemetry-buffer" class="font-mono text-[11px] px-2 py-0.5 rounded bg-studio-900 text-slate-400 border border-studio-700">
+                                IDLE
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Primary Transport Controls -->
+            <section class="bg-studio-900 border border-studio-700 rounded-xl p-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                <div class="flex flex-wrap items-center gap-3 flex-1">
+                    <!-- RUN / START Button -->
+                    <button type="button" id="btn-run" class="hw-btn flex-1 sm:flex-initial min-w-[130px] py-3 px-6 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm tracking-wide flex items-center justify-center gap-2 shadow-lg shadow-emerald-950/50">
+                        <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                        <span>RUN MTC</span>
+                    </button>
+
+                    <!-- STOP Button -->
+                    <button type="button" id="btn-stop" disabled class="hw-btn flex-1 sm:flex-initial min-w-[130px] py-3 px-6 rounded-xl bg-studio-800 hover:bg-rose-600 disabled:opacity-40 disabled:hover:bg-studio-800 text-white font-bold text-sm tracking-wide flex items-center justify-center gap-2 border border-studio-600">
+                        <svg class="w-4 h-4 fill-current" viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg>
+                        <span>STOP</span>
+                    </button>
+                </div>
+
+                <!-- ZERO / CLEAR Button -->
+                <button type="button" id="btn-zero" class="hw-btn py-3 px-5 rounded-xl bg-studio-800 hover:bg-amber-600/20 hover:border-amber-500/60 hover:text-amber-300 text-slate-200 font-semibold text-sm border border-studio-600 flex items-center justify-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/>
+                    </svg>
+                    <span>CLEAR TO ZEROS (00:00:00:00)</span>
+                </button>
+            </section>
+
+            <!-- Collapsible / Compact MIDI Out Hex Monitor -->
+            <section class="bg-studio-950 border border-studio-800 rounded-xl overflow-hidden">
+                <div class="px-4 py-2.5 bg-studio-900/90 border-b border-studio-800 flex items-center justify-between">
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs font-mono font-semibold text-slate-400">MIDI OUTPUT MONITOR (HEX)</span>
+                        <span id="msg-counter" class="text-[11px] font-mono px-2 py-0.5 rounded bg-studio-800 text-slate-400">0 msgs</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <label class="inline-flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer">
+                            <input type="checkbox" id="chk-log-qf" checked class="rounded bg-studio-800 border-studio-600 text-amber-500 focus:ring-0">
+                            <span>Log Quarter-Frames</span>
+                        </label>
+                        <button type="button" id="btn-clear-log" class="text-xs font-mono text-slate-400 hover:text-white px-2 py-1 rounded bg-studio-800 hover:bg-studio-700">
+                            Clear Log
+                        </button>
+                    </div>
+                </div>
+                <div id="midi-log" class="h-32 overflow-y-auto p-3 font-mono text-xs space-y-1 text-slate-300">
+                    <div class="text-slate-500 italic">System ready. Select a MIDI Output port and press RUN MTC to transmit...</div>
+                </div>
+            </section>
+
+        </div>
+    </main>
+
+    <!-- Footer Note -->
+    <footer class="mt-4 text-center text-xs text-slate-500 max-w-xl">
+        Generates standard MIDI Quarter Frame (<code class="text-slate-400">F1 xx</code>) &amp; Universal Real-Time Full Frame SysEx (<code class="text-slate-400">F0 7F 7F 01 01 ... F7</code>) messages.
+    </footer>
+
+    <script>
+        /**
+         * MTC SYNC MASTER - WebMIDI Timecode Generator
+         * 
+         * Technical Implementation Notes:
+         * - MTC transmits 1 complete SMPTE timecode value over 8 Quarter-Frame (QF) messages (0xF1).
+         * - Therefore, 4 Quarter-Frames occur per video/audio frame (QF rate = FPS * 4).
+         * - Even-numbered QF pieces (0, 2, 4, 6) are transmitted on even frames;
+         *   Odd-numbered QF pieces (1, 3, 5, 7) are transmitted on the subsequent frame.
+         * - When jumping, locating, or starting playback, a 10-byte Universal Real-Time SysEx
+         *   Full Frame message (F0 7F 7F 01 01 hr mn sc fr F7) is sent so receivers lock immediately.
+         */
+
+        // ==========================================
+        // 1. STATE & CONSTANTS
+        // ==========================================
+        const FRAME_RATES = {
+            '24':    { fps: 24,    exactFps: 24,        code: 0b00, dropFrame: false, label: '24 FPS' },
+            '25':    { fps: 25,    exactFps: 25,        code: 0b01, dropFrame: false, label: '25 FPS' },
+            '29.97': { fps: 30,    exactFps: 30000/1001,code: 0b10, dropFrame: true,  label: '29.97 FPS (DF)' },
+            '30':    { fps: 30,    exactFps: 30,        code: 0b11, dropFrame: false, label: '30 FPS (NDF)' }
+        };
+
+        const state = {
+            midiAccess: null,
+            selectedOutputId: null,
+            rateKey: '30',
+            mode: 'manual', // 'manual' | 'tod'
+            isRunning: false,
+            
+            // Current visual/master timecode register
+            tc: { hh: 0, mm: 0, ss: 0, ff: 0 },
+            // Strictly sequential 2-frame MTC base register (advances by +2 frames every 8 QFs)
+            seqBaseTc: { hh: 0, mm: 0, ss: 0, ff: 0 },
+            
+            // Quarter-frame & Hybrid Audio/Worker Scheduler state
+            qfPiece: 0, // Strict 0..7 sequence
+            nextEventAudioSec: 0,
+            audioCtx: null,
+            audioToPerfOffsetMs: 0,
+            worker: null,
+            workerBlobUrl: null,
+            lastSentTotalFrames: -1,
+            todPreviewTimerId: null,
+
+            // Rate & Transmission Control settings
+            txMode: 'hw-timestamped',   // 'hw-timestamped' | 'worker-immediate' | 'qf-throttled' | 'qf-0.5x' | 'sysex-periodic'
+            lookaheadMs: 20,            // 5ms - 50ms lookahead window for AudioContext -> WebMIDI timestamping
+            customHzCap: 60,            // Max messages per second when throttled or periodic
+            startSysExMode: 'delay-40', // 'delay-40' | 'delay-100' | 'none'
+
+            // Telemetry tracking (Jitter & Rate)
+            txTimestampsWindow: [],
+            intervalErrorsMs: [],
+            lastScheduledPerfMs: 0,
+            telemetryTimerId: null,
+            
+            // Logging
+            msgCount: 0,
+            logQuarterFrames: true
+        };
+
+        // ==========================================
+        // 2. DOM ELEMENTS
+        // ==========================================
+        const el = {
+            statusBanner: document.getElementById('status-banner'),
+            statusBannerText: document.getElementById('status-banner-text'),
+            btnRetryMidi: document.getElementById('btn-retry-midi'),
+            
+            ledMidiReady: document.getElementById('led-midi-ready'),
+            ledTx: document.getElementById('led-tx'),
+            ledSysex: document.getElementById('led-sysex'),
+            
+            tcDisplay: document.getElementById('tc-display'),
+            badgeState: document.getElementById('badge-state'),
+            badgeMode: document.getElementById('badge-mode'),
+            badgeFps: document.getElementById('badge-fps'),
+            badgeQfPhase: document.getElementById('badge-qf-phase'),
+            
+            midiSelect: document.getElementById('midi-output-select'),
+            midiPortCount: document.getElementById('midi-port-count'),
+            btnRefreshPorts: document.getElementById('btn-refresh-ports'),
+            fpsButtons: document.querySelectorAll('.fps-btn'),
+            
+            btnModeManual: document.getElementById('btn-mode-manual'),
+            btnModeTod: document.getElementById('btn-mode-tod'),
+            manualInputsContainer: document.getElementById('manual-inputs-container'),
+            todInfoContainer: document.getElementById('tod-info-container'),
+            todDateStr: document.getElementById('tod-date-str'),
+            
+            inputHh: document.getElementById('input-hh'),
+            inputMm: document.getElementById('input-mm'),
+            inputSs: document.getElementById('input-ss'),
+            inputFf: document.getElementById('input-ff'),
+            labelInputFf: document.getElementById('label-input-ff'),
+            btnLocateNow: document.getElementById('btn-locate-now'),
+            
+            btnRun: document.getElementById('btn-run'),
+            btnStop: document.getElementById('btn-stop'),
+            btnZero: document.getElementById('btn-zero'),
+
+            // Rate & Anti-Jam Controls
+            txModeSelect: document.getElementById('tx-mode-select'),
+            txModeDesc: document.getElementById('tx-mode-desc'),
+            rateSlider: document.getElementById('rate-slider'),
+            rateSliderLabel: document.getElementById('rate-slider-label'),
+            rateSliderVal: document.getElementById('rate-slider-val'),
+            sliderScaleLabels: document.getElementById('slider-scale-labels'),
+            startSysExMode: document.getElementById('start-sysex-mode'),
+            telemetryHz: document.getElementById('telemetry-hz'),
+            telemetryMs: document.getElementById('telemetry-ms'),
+            telemetryJitter: document.getElementById('telemetry-jitter'),
+            telemetryBuffer: document.getElementById('telemetry-buffer'),
+            badgeClockEngine: document.getElementById('badge-clock-engine'),
+            
+            midiLog: document.getElementById('midi-log'),
+            msgCounter: document.getElementById('msg-counter'),
+            chkLogQf: document.getElementById('chk-log-qf'),
+            btnClearLog: document.getElementById('btn-clear-log')
+        };
+
+        // ==========================================
+        // 2B. INLINE WEB WORKER (2ms UNTHROTTLED TICKER)
+        // ==========================================
+        function initTimingWorker() {
+            if (state.worker) return;
+            const workerCode = `
+                let timerId = null;
+                self.onmessage = function(e) {
+                    if (e.data === 'start') {
+                        if (timerId !== null) clearInterval(timerId);
+                        timerId = setInterval(() => {
+                            self.postMessage('tick');
+                        }, 2);
+                    } else if (e.data === 'stop') {
+                        if (timerId !== null) {
+                            clearInterval(timerId);
+                            timerId = null;
+                        }
+                    }
+                };
+            `;
+            const blob = new Blob([workerCode], { type: 'application/javascript' });
+            state.workerBlobUrl = URL.createObjectURL(blob);
+            state.worker = new Worker(state.workerBlobUrl);
+            state.worker.onmessage = () => {
+                if (state.isRunning) {
+                    scheduleMtcLookahead();
+                }
+            };
+        }
+
+        /**
+         * Ensures a hardware-crystal AudioContext clock is running and calibrated to performance.now()
+         */
+        async function ensureAudioClock() {
+            const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+            if (!AudioContextClass) return null;
+
+            if (!state.audioCtx) {
+                state.audioCtx = new AudioContextClass({ latencyHint: 'interactive' });
+            }
+            if (state.audioCtx.state === 'suspended') {
+                await state.audioCtx.resume();
+            }
+
+            // Sample paired timestamps to map AudioContext.currentTime -> DOMHighResTimeStamp
+            const perfNow = performance.now();
+            const audioNowMs = state.audioCtx.currentTime * 1000.0;
+            state.audioToPerfOffsetMs = perfNow - audioNowMs;
+            return state.audioCtx;
+        }
+
+        function getAudioTimeSec() {
+            if (state.audioCtx && state.audioCtx.state === 'running') {
+                return state.audioCtx.currentTime;
+            }
+            return performance.now() / 1000.0;
+        }
+
+        function audioSecToPerfMs(audioSec) {
+            if (state.audioCtx && state.audioCtx.state === 'running') {
+                return (audioSec * 1000.0) + state.audioToPerfOffsetMs;
+            }
+            return audioSec * 1000.0;
+        }
+
+        // ==========================================
+        // 3. WEBMIDI INITIALIZATION & PORT MANAGEMENT
+        // ==========================================
+        async function initWebMIDI() {
+            if (!navigator.requestMIDIAccess) {
+                showBanner('WebMIDI API is not supported in this browser. Please use Chrome, Edge, or Opera.', false);
+                updateMidiLed(false);
+                el.midiSelect.innerHTML = '<option value="">WebMIDI Unsupported</option>';
+                return;
+            }
+
+            try {
+                // Request SysEx permission (sysex: true) so we can send MTC Full Frame messages
+                state.midiAccess = await navigator.requestMIDIAccess({ sysex: true });
+                hideBanner();
+                updateMidiLed(true);
+                populateMidiOutputs();
+
+                // Listen for hot-plugged MIDI interfaces
+                state.midiAccess.onstatechange = () => {
+                    populateMidiOutputs();
+                };
+            } catch (err) {
+                console.error('WebMIDI Access Error:', err);
+                showBanner(`MIDI Access Denied or Blocked: ${err.message || 'Ensure SysEx permission is allowed.'}`, true);
+                updateMidiLed(false);
+                el.midiSelect.innerHTML = '<option value="">MIDI Permission Required</option>';
+            }
+        }
+
+        function populateMidiOutputs() {
+            if (!state.midiAccess) return;
+
+            const outputs = Array.from(state.midiAccess.outputs.values());
+            const prevSelected = state.selectedOutputId || el.midiSelect.value;
+            
+            el.midiSelect.innerHTML = '';
+            el.midiPortCount.textContent = `${outputs.length} port${outputs.length === 1 ? '' : 's'}`;
+
+            if (outputs.length === 0) {
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = '-- No MIDI Output Ports Found (Virtual/Hardware) --';
+                el.midiSelect.appendChild(opt);
+                state.selectedOutputId = null;
+                showBanner('No MIDI output ports detected. Connect a MIDI interface or enable a virtual MIDI bus (e.g., IAC Driver / loopMIDI), then click Refresh.', false);
+                return;
+            }
+
+            hideBanner();
+
+            outputs.forEach((output) => {
+                const opt = document.createElement('option');
+                opt.value = output.id;
+                opt.textContent = `${output.name}${output.manufacturer ? ` (${output.manufacturer})` : ''}`;
+                el.midiSelect.appendChild(opt);
+            });
+
+            // Restore previous selection if still connected, otherwise pick first
+            const stillExists = outputs.some(o => o.id === prevSelected);
+            if (stillExists) {
+                el.midiSelect.value = prevSelected;
+                state.selectedOutputId = prevSelected;
+            } else {
+                el.midiSelect.value = outputs[0].id;
+                state.selectedOutputId = outputs[0].id;
+            }
+        }
+
+        function getActiveMidiOutput() {
+            if (!state.midiAccess || !state.selectedOutputId) return null;
+            return state.midiAccess.outputs.get(state.selectedOutputId) || null;
+        }
+
+        // ==========================================
+        // 4. TIMECODE MATH & DROP-FRAME LOGIC
+        // ==========================================
+        function getRateConfig() {
+            return FRAME_RATES[state.rateKey];
+        }
+
+        /**
+         * Advances timecode by 1 frame, properly handling 29.97 Drop-Frame rules:
+         * Drop frames 00 and 01 at the start of every minute EXCEPT every 10th minute (00, 10, 20, 30, 40, 50).
+         */
+        function incrementOneFrame(tc) {
+            const rate = getRateConfig();
+            tc.ff++;
+
+            if (tc.ff >= rate.fps) {
+                tc.ff = 0;
+                tc.ss++;
+
+                if (tc.ss >= 60) {
+                    tc.ss = 0;
+                    tc.mm++;
+
+                    if (tc.mm >= 60) {
+                        tc.mm = 0;
+                        tc.hh = (tc.hh + 1) % 24;
+                    }
+
+                    // 29.97 Drop-Frame compensation at minute boundary
+                    if (rate.dropFrame && (tc.mm % 10 !== 0)) {
+                        tc.ff = 2; // Skip frames 0 and 1
+                    }
+                }
+            }
+        }
+
+        /**
+         * Computes current wall-clock Time of Day as SMPTE Timecode
+         */
+        function getWallClockTimecode() {
+            const now = new Date();
+            const rate = getRateConfig();
+            const hh = now.getHours();
+            const mm = now.getMinutes();
+            const ss = now.getSeconds();
+            const ms = now.getMilliseconds();
+
+            let ff = Math.floor((ms / 1000) * rate.fps);
+            if (ff >= rate.fps) ff = rate.fps - 1;
+
+            // Enforce valid drop-frame numbers if in 29.97 DF mode
+            if (rate.dropFrame && ss === 0 && (mm % 10 !== 0) && ff < 2) {
+                ff = 2;
+            }
+
+            return { hh, mm, ss, ff };
+        }
+
+        /**
+         * Converts SMPTE Timecode struct to linear frame count (accounting for 29.97 DF)
+         */
+        function timecodeToTotalFrames(tc) {
+            const rate = getRateConfig();
+            const totalMinutes = tc.hh * 60 + tc.mm;
+            if (rate.dropFrame) {
+                const dropFrames = 2 * (totalMinutes - Math.floor(totalMinutes / 10));
+                return (tc.hh * 3600 + tc.mm * 60 + tc.ss) * 30 + tc.ff - dropFrames;
+            }
+            return (tc.hh * 3600 + tc.mm * 60 + tc.ss) * rate.fps + tc.ff;
+        }
+
+        /**
+         * Converts linear frame count back into SMPTE HH:MM:SS:FF (accounting for 29.97 DF)
+         */
+        function totalFramesToTimecode(totalFrames) {
+            const rate = getRateConfig();
+            const maxFramesPerDay = rate.dropFrame ? 2589408 : (86400 * rate.fps);
+            let f = ((Math.floor(totalFrames) % maxFramesPerDay) + maxFramesPerDay) % maxFramesPerDay;
+
+            if (rate.dropFrame) {
+                const D = Math.floor(f / 17982);
+                const M = f % 17982;
+                f += 18 * D + 2 * Math.max(0, Math.floor((M - 2) / 1798));
+            }
+
+            const fps = rate.fps;
+            const ff = f % fps;
+            const totalSecs = Math.floor(f / fps);
+            const ss = totalSecs % 60;
+            const totalMins = Math.floor(totalSecs / 60);
+            const mm = totalMins % 60;
+            const hh = Math.floor(totalMins / 60) % 24;
+
+            return { hh, mm, ss, ff };
+        }
+
+        /**
+         * Sanitizes manual input values to valid ranges for the active frame rate
+         */
+        function sanitizeManualTimecode() {
+            const rate = getRateConfig();
+            let hh = clampInt(el.inputHh.value, 0, 23);
+            let mm = clampInt(el.inputMm.value, 0, 59);
+            let ss = clampInt(el.inputSs.value, 0, 59);
+            let ff = clampInt(el.inputFf.value, 0, rate.fps - 1);
+
+            // Prevent illegal drop-frame numbers (00, 01 on non-10th minutes)
+            if (rate.dropFrame && ss === 0 && (mm % 10 !== 0) && ff < 2) {
+                ff = 2;
+            }
+
+            el.inputHh.value = pad2(hh);
+            el.inputMm.value = pad2(mm);
+            el.inputSs.value = pad2(ss);
+            el.inputFf.value = pad2(ff);
+
+            state.tc = { hh, mm, ss, ff };
+            updateTimecodeDisplay();
+        }
+
+        // ==========================================
+        // 5. MTC MESSAGE ENCODING & TRANSMISSION
+        // ==========================================
+
+        /**
+         * Helper to dispatch MIDI bytes either with exact DOMHighResTimeStamp lookahead or immediately
+         */
+        function dispatchMidiBytes(output, bytes, scheduledTimestampMs = null) {
+            if (!output) return;
+            try {
+                if (scheduledTimestampMs !== null) {
+                    output.send(bytes, scheduledTimestampMs);
+                } else {
+                    output.send(bytes);
+                }
+                state.txTimestampsWindow.push(performance.now());
+            } catch (err) {
+                console.error('Failed to send MIDI message:', err);
+            }
+        }
+
+        /**
+         * Sends Universal Real-Time MTC Full Frame SysEx message:
+         * F0 7F 7F 01 01 hr mn sc fr F7
+         */
+        function sendMtcFullFrame(tc, scheduledTimestampMs = null) {
+            const output = getActiveMidiOutput();
+            const rate = getRateConfig();
+
+            // Encode 2-bit rate code into bits 5-6 of the hours byte
+            const hrByte = ((rate.code & 0x03) << 5) | (tc.hh & 0x1F);
+            const mnByte = tc.mm & 0x3F;
+            const scByte = tc.ss & 0x3F;
+            const frByte = tc.ff & 0x1F;
+
+            const sysex = [0xF0, 0x7F, 0x7F, 0x01, 0x01, hrByte, mnByte, scByte, frByte, 0xF7];
+
+            if (output) {
+                dispatchMidiBytes(output, sysex, scheduledTimestampMs);
+                flashLed(el.ledSysex, 'bg-amber-400', 180);
+            }
+
+            logMidiBytes(sysex, `FULL FRAME [${formatTimecode(tc)}]`, true);
+        }
+
+        /**
+         * Builds and sends a single 2-byte MTC Quarter Frame message:
+         * Status: 0xF1
+         * Data:   (pieceIndex << 4) | nibble
+         */
+        function sendQuarterFramePiece(pieceIndex, tc, scheduledTimestampMs = null) {
+            const output = getActiveMidiOutput();
+            const rate = getRateConfig();
+            let nibble = 0;
+
+            switch (pieceIndex) {
+                case 0: nibble = tc.ff & 0x0F; break;                     // Frame LS nibble
+                case 1: nibble = (tc.ff >> 4) & 0x01; break;              // Frame MS bit
+                case 2: nibble = tc.ss & 0x0F; break;                     // Seconds LS nibble
+                case 3: nibble = (tc.ss >> 4) & 0x03; break;              // Seconds MS 2 bits
+                case 4: nibble = tc.mm & 0x0F; break;                     // Minutes LS nibble
+                case 5: nibble = (tc.mm >> 4) & 0x03; break;              // Minutes MS 2 bits
+                case 6: nibble = tc.hh & 0x0F; break;                     // Hours LS nibble
+                case 7: nibble = ((rate.code & 0x03) << 1) | ((tc.hh >> 4) & 0x01); break; // Rate + Hours MS bit
+            }
+
+            const dataByte = ((pieceIndex & 0x07) << 4) | (nibble & 0x0F);
+            const msg = [0xF1, dataByte];
+
+            if (output) {
+                dispatchMidiBytes(output, msg, scheduledTimestampMs);
+                if (pieceIndex === 0 || pieceIndex === 4) {
+                    flashLed(el.ledTx, 'bg-emerald-400', 60);
+                }
+            }
+
+            if (state.logQuarterFrames) {
+                logMidiBytes(msg, `QF #${pieceIndex}`, false);
+            }
+        }
+
+        // ==========================================
+        // 6. HIGH-PRECISION HYBRID AUDIO + WORKER SCHEDULER
+        // ==========================================
+        function getEffectiveMessageIntervalSec() {
+            const rate = getRateConfig();
+            const standardQfHz = rate.exactFps * 4;
+
+            switch (state.txMode) {
+                case 'hw-timestamped':
+                case 'worker-immediate':
+                    return 1.0 / standardQfHz;
+                case 'qf-0.5x':
+                    return 1.0 / (standardQfHz * 0.5);
+                case 'qf-throttled': {
+                    const targetHz = Math.min(state.customHzCap, standardQfHz);
+                    return 1.0 / Math.max(1, targetHz);
+                }
+                case 'sysex-periodic': {
+                    const targetHz = Math.min(state.customHzCap, rate.exactFps);
+                    return 1.0 / Math.max(1, targetHz);
+                }
+                default:
+                    return 1.0 / standardQfHz;
+            }
+        }
+
+        async function startGenerator() {
+            if (state.isRunning) return;
+
+            initTimingWorker();
+            await ensureAudioClock();
+
+            if (state.mode === 'tod') {
+                state.tc = getWallClockTimecode();
+                // Align TOD start cleanly to an even frame boundary for standard 8-nibble MTC
+                if (state.tc.ff % 2 !== 0) {
+                    incrementOneFrame(state.tc);
+                }
+            } else {
+                sanitizeManualTimecode();
+            }
+
+            state.isRunning = true;
+            state.qfPiece = 0;
+            state.seqBaseTc = { ...state.tc };
+            state.lastSentTotalFrames = -1;
+            state.txTimestampsWindow = [];
+            state.intervalErrorsMs = [];
+            state.lastScheduledPerfMs = 0;
+
+            const audioNow = getAudioTimeSec();
+
+            // Determine Start SysEx behavior to avoid colliding with first Quarter Frame
+            let startDelaySec = 0;
+            if (state.startSysExMode === 'delay-40') {
+                sendMtcFullFrame(state.seqBaseTc);
+                startDelaySec = 0.040;
+            } else if (state.startSysExMode === 'delay-100') {
+                sendMtcFullFrame(state.seqBaseTc);
+                startDelaySec = 0.100;
+            }
+
+            // Anchor the crystal-accurate AudioContext schedule timeline
+            state.nextEventAudioSec = audioNow + startDelaySec;
+
+            // Start 2ms unthrottled Web Worker ticker & run initial lookahead pass
+            state.worker.postMessage('start');
+            scheduleMtcLookahead();
+
+            updateTransportUI();
+            updateTimecodeDisplay();
+            updateRateControlsUI();
+        }
+
+        function stopGenerator() {
+            if (!state.isRunning) return;
+
+            state.isRunning = false;
+            if (state.worker) {
+                state.worker.postMessage('stop');
+            }
+
+            // Sync manual input fields with where playback stopped
+            if (state.mode === 'manual') {
+                syncInputsFromState();
+            }
+
+            state.txTimestampsWindow = [];
+            state.intervalErrorsMs = [];
+            el.telemetryHz.textContent = '0.0 Hz';
+            el.telemetryJitter.textContent = '±0.00 ms';
+            el.telemetryBuffer.textContent = 'IDLE';
+            el.telemetryBuffer.className = 'font-mono text-[11px] px-2 py-0.5 rounded bg-studio-900 text-slate-400 border border-studio-700';
+
+            updateTransportUI();
+            updateTimecodeDisplay();
+        }
+
+        function zeroAndClear() {
+            const wasRunning = state.isRunning;
+            if (wasRunning) {
+                stopGenerator();
+            }
+
+            // Switch to manual mode if currently in TOD so zeroing makes sense
+            if (state.mode === 'tod') {
+                setMode('manual');
+            }
+
+            state.tc = { hh: 0, mm: 0, ss: 0, ff: 0 };
+            state.seqBaseTc = { hh: 0, mm: 0, ss: 0, ff: 0 };
+            state.qfPiece = 0;
+
+            syncInputsFromState();
+            updateTimecodeDisplay();
+            el.badgeQfPhase.innerHTML = `QF PIECE: <strong class="text-slate-300">0/7</strong>`;
+
+            // Send Full Frame SysEx of 00:00:00:00
+            sendMtcFullFrame(state.tc);
+        }
+
+        /**
+         * Hybrid Audio-Clock + Web Worker Lookahead Scheduler:
+         * - In 'hw-timestamped' mode, schedules future Quarter-Frames within the lookahead window
+         *   (e.g. 20ms) and passes exact DOMHighResTimeStamp targets to midiOutput.send(bytes, ts).
+         * - Strictly maintains sequential 8-nibble state (0 -> 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7)
+         *   and advances the MTC base timecode by exactly +2 frames after piece 7.
+         */
+        function scheduleMtcLookahead() {
+            if (!state.isRunning) return;
+
+            // Continuously refine AudioContext <-> performance.now() mapping against drift
+            if (state.audioCtx && state.audioCtx.state === 'running') {
+                const measuredOffset = performance.now() - (state.audioCtx.currentTime * 1000.0);
+                state.audioToPerfOffsetMs += (measuredOffset - state.audioToPerfOffsetMs) * 0.05;
+            }
+
+            const audioNow = getAudioTimeSec();
+            const intervalSec = getEffectiveMessageIntervalSec();
+            const isTimestamped = (state.txMode === 'hw-timestamped');
+            const horizonSec = isTimestamped ? (state.lookaheadMs / 1000.0) : 0.001;
+
+            // Guard against massive browser suspension (> 250ms stall)
+            if (audioNow - state.nextEventAudioSec > 0.25) {
+                if (state.mode === 'tod') {
+                    state.seqBaseTc = getWallClockTimecode();
+                    if (state.seqBaseTc.ff % 2 !== 0) incrementOneFrame(state.seqBaseTc);
+                }
+                state.qfPiece = 0;
+                state.nextEventAudioSec = audioNow + 0.005;
+            }
+
+            let scheduledInPass = 0;
+
+            while (state.nextEventAudioSec <= audioNow + horizonSec) {
+                const targetPerfMs = audioSecToPerfMs(state.nextEventAudioSec);
+                const sendTs = isTimestamped ? targetPerfMs : null;
+
+                // Record interval precision telemetry
+                const expectedMs = intervalSec * 1000.0;
+                if (state.lastScheduledPerfMs > 0) {
+                    const actualDeltaMs = (isTimestamped ? targetPerfMs : performance.now()) - state.lastScheduledPerfMs;
+                    const errMs = Math.abs(actualDeltaMs - expectedMs);
+                    state.intervalErrorsMs.push(errMs);
+                    if (state.intervalErrorsMs.length > 120) {
+                        state.intervalErrorsMs.shift();
+                    }
+                }
+                state.lastScheduledPerfMs = isTimestamped ? targetPerfMs : performance.now();
+
+                if (state.txMode === 'sysex-periodic') {
+                    // Periodic Full-Frame SysEx snapshot mode
+                    if (state.mode === 'tod') {
+                        state.seqBaseTc = getWallClockTimecode();
+                    }
+                    const totalFrames = timecodeToTotalFrames(state.seqBaseTc);
+                    if (totalFrames !== state.lastSentTotalFrames) {
+                        sendMtcFullFrame(state.seqBaseTc, sendTs);
+                        state.lastSentTotalFrames = totalFrames;
+                    }
+                    state.tc = { ...state.seqBaseTc };
+                    updateTimecodeDisplay();
+                    el.badgeQfPhase.innerHTML = `MODE: <strong class="text-amber-400">FULL-FRAME</strong>`;
+                    incrementOneFrame(state.seqBaseTc);
+                } else {
+                    // Strict Sequential 8-Nibble Quarter-Frame State Machine
+                    if (state.qfPiece === 0 && state.mode === 'tod') {
+                        // Gently steer TOD at even-frame boundaries only if drifted > 2 frames
+                        const wallTc = getWallClockTimecode();
+                        const diffFrames = Math.abs(timecodeToTotalFrames(wallTc) - timecodeToTotalFrames(state.seqBaseTc));
+                        if (diffFrames > 2 && diffFrames < 2500000) {
+                            state.seqBaseTc = wallTc;
+                            if (state.seqBaseTc.ff % 2 !== 0) incrementOneFrame(state.seqBaseTc);
+                        }
+                    }
+
+                    // Update visual display cleanly at frame boundaries (QF 0 = frame N, QF 4 = frame N+1)
+                    if (state.qfPiece === 0) {
+                        state.tc = { ...state.seqBaseTc };
+                        updateTimecodeDisplay();
+                    } else if (state.qfPiece === 4) {
+                        const midFrameTc = { ...state.seqBaseTc };
+                        incrementOneFrame(midFrameTc);
+                        state.tc = midFrameTc;
+                        updateTimecodeDisplay();
+                    }
+
+                    sendQuarterFramePiece(state.qfPiece, state.seqBaseTc, sendTs);
+                    el.badgeQfPhase.innerHTML = `QF PIECE: <strong class="text-amber-400">${state.qfPiece}/7</strong>`;
+
+                    // Advance piece 0..7; upon completing piece 7, advance base timecode by exactly 2 frames
+                    state.qfPiece++;
+                    if (state.qfPiece >= 8) {
+                        state.qfPiece = 0;
+                        incrementOneFrame(state.seqBaseTc);
+                        incrementOneFrame(state.seqBaseTc);
+                    }
+                }
+
+                state.nextEventAudioSec += intervalSec;
+                scheduledInPass++;
+
+                // Safety cap per tick
+                if (scheduledInPass >= 16) break;
+            }
+        }
+
+        // ==========================================
+        // 7. UI UPDATES & EVENT LISTENERS
+        // ==========================================
+        function updateRateControlsUI() {
+            const rate = getRateConfig();
+            const standardQfHz = Math.round(rate.exactFps * 4);
+            const intervalMs = getEffectiveMessageIntervalSec() * 1000.0;
+
+            el.telemetryMs.textContent = `${intervalMs.toFixed(3)} ms`;
+
+            const descriptions = {
+                'hw-timestamped': `AudioContext crystal clock pre-schedules exact DOMHighResTimeStamp packets (${intervalMs.toFixed(3)} ms) for solid MTP_AV lock.`,
+                'worker-immediate': `2ms Web Worker dispatches un-timestamped packets directly (fallback for USB interfaces that ignore future timestamps).`,
+                'qf-throttled': `Caps Quarter-Frame rate to ${Math.min(state.customHzCap, standardQfHz)} Hz (note: MTP_AV requires 1x SMPTE rate for full lock).`,
+                'qf-0.5x': `Sends Quarter Frames at 50% rate (${(standardQfHz * 0.5).toFixed(1)} Hz) for slow MIDI mergers.`,
+                'sysex-periodic': `Sends Full-Frame SysEx snapshots at up to ${Math.min(state.customHzCap, rate.fps)} Hz instead of 0xF1 Quarter Frames.`
+            };
+            el.txModeDesc.textContent = descriptions[state.txMode] || '';
+
+            if (state.txMode === 'hw-timestamped') {
+                el.rateSlider.disabled = false;
+                el.rateSlider.min = 5;
+                el.rateSlider.max = 50;
+                el.rateSlider.value = state.lookaheadMs;
+                el.rateSliderLabel.textContent = 'Driver Lookahead Buffer';
+                el.rateSliderVal.textContent = `${state.lookaheadMs} ms`;
+                el.sliderScaleLabels.innerHTML = '<span>5 ms (Tight)</span><span>20 ms (Default)</span><span>35 ms</span><span>50 ms (Safe)</span>';
+                el.rateSlider.parentElement.classList.remove('opacity-45');
+            } else if (state.txMode === 'qf-throttled') {
+                el.rateSlider.disabled = false;
+                el.rateSlider.min = 8;
+                el.rateSlider.max = standardQfHz;
+                if (state.customHzCap > standardQfHz || state.customHzCap < 8) {
+                    state.customHzCap = Math.min(60, standardQfHz);
+                }
+                el.rateSlider.value = state.customHzCap;
+                el.rateSliderLabel.textContent = 'Max QF Message Rate Cap';
+                el.rateSliderVal.textContent = `${state.customHzCap} Hz`;
+                el.sliderScaleLabels.innerHTML = '<span>8 Hz</span><span>30 Hz</span><span>60 Hz</span><span>120 Hz</span>';
+                el.rateSlider.parentElement.classList.remove('opacity-45');
+            } else if (state.txMode === 'sysex-periodic') {
+                el.rateSlider.disabled = false;
+                el.rateSlider.min = 1;
+                el.rateSlider.max = rate.fps;
+                if (state.customHzCap > rate.fps) {
+                    state.customHzCap = Math.min(10, rate.fps);
+                }
+                el.rateSlider.value = state.customHzCap;
+                el.rateSliderLabel.textContent = 'Full-Frame SysEx Rate';
+                el.rateSliderVal.textContent = `${state.customHzCap} Hz`;
+                el.sliderScaleLabels.innerHTML = '<span>1 Hz</span><span>10 Hz</span><span>20 Hz</span><span>30 Hz</span>';
+                el.rateSlider.parentElement.classList.remove('opacity-45');
+            } else {
+                el.rateSlider.disabled = true;
+                el.rateSliderLabel.textContent = 'Locked SMPTE Interval';
+                el.rateSliderVal.textContent = `${intervalMs.toFixed(3)} ms`;
+                el.sliderScaleLabels.innerHTML = '<span>Fixed Rate</span><span>Audio Clock Locked</span>';
+                el.rateSlider.parentElement.classList.add('opacity-45');
+            }
+        }
+
+        function startTelemetryLoop() {
+            if (state.telemetryTimerId) clearInterval(state.telemetryTimerId);
+            state.telemetryTimerId = setInterval(() => {
+                if (!state.isRunning) {
+                    el.telemetryHz.textContent = '0.0 Hz';
+                    el.telemetryJitter.textContent = '±0.00 ms';
+                    return;
+                }
+                const now = performance.now();
+                // Keep timestamps within the trailing 1000ms window
+                state.txTimestampsWindow = state.txTimestampsWindow.filter(t => (now - t) <= 1000);
+                el.telemetryHz.textContent = `${state.txTimestampsWindow.length.toFixed(1)} Hz`;
+
+                // Compute RMS jitter deviation in milliseconds
+                if (state.intervalErrorsMs.length > 0) {
+                    const sumSq = state.intervalErrorsMs.reduce((acc, v) => acc + (v * v), 0);
+                    const rmsJitter = Math.sqrt(sumSq / state.intervalErrorsMs.length);
+                    el.telemetryJitter.textContent = `±${rmsJitter.toFixed(2)} ms`;
+                    el.telemetryJitter.className = rmsJitter <= 0.15
+                        ? 'text-emerald-400'
+                        : (rmsJitter <= 1.2 ? 'text-amber-400' : 'text-rose-400');
+                }
+
+                // Update lookahead queue health indicator
+                const leadMs = (state.nextEventAudioSec - getAudioTimeSec()) * 1000.0;
+                if (state.txMode === 'hw-timestamped') {
+                    el.telemetryBuffer.textContent = `LOCKED (+${Math.max(0, leadMs).toFixed(1)}ms)`;
+                    el.telemetryBuffer.className = 'font-mono text-[11px] px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30';
+                } else {
+                    el.telemetryBuffer.textContent = 'WORKER LIVE';
+                    el.telemetryBuffer.className = 'font-mono text-[11px] px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-400 border border-cyan-500/30';
+                }
+            }, 200);
+        }
+
+        function formatTimecode(tc) {
+            const rate = getRateConfig();
+            const sep = rate.dropFrame ? ';' : ':';
+            return `${pad2(tc.hh)}:${pad2(tc.mm)}:${pad2(tc.ss)}${sep}${pad2(tc.ff)}`;
+        }
+
+        function updateTimecodeDisplay() {
+            el.tcDisplay.textContent = formatTimecode(state.tc);
+
+            el.tcDisplay.classList.remove('led-text-active', 'led-text-stopped', 'led-text-tod');
+            if (state.isRunning) {
+                el.tcDisplay.classList.add(state.mode === 'tod' ? 'led-text-tod' : 'led-text-active');
+            } else {
+                el.tcDisplay.classList.add('led-text-stopped');
+            }
+        }
+
+        function updateTransportUI() {
+            if (state.isRunning) {
+                el.btnRun.disabled = true;
+                el.btnRun.classList.add('opacity-40', 'cursor-not-allowed');
+                el.btnStop.disabled = false;
+                el.btnStop.classList.remove('opacity-40');
+
+                el.badgeState.textContent = 'RUNNING';
+                el.badgeState.className = 'px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-semibold tracking-wider';
+
+                // Lock manual inputs while running
+                setManualInputsDisabled(true);
+            } else {
+                el.btnRun.disabled = false;
+                el.btnRun.classList.remove('opacity-40', 'cursor-not-allowed');
+                el.btnStop.disabled = true;
+                el.btnStop.classList.add('opacity-40');
+
+                el.badgeState.textContent = 'STOPPED';
+                el.badgeState.className = 'px-2 py-0.5 rounded bg-slate-800/90 text-slate-400 border border-slate-700 font-semibold tracking-wider';
+
+                setManualInputsDisabled(state.mode === 'tod');
+            }
+        }
+
+        function setManualInputsDisabled(disabled) {
+            [el.inputHh, el.inputMm, el.inputSs, el.inputFf, el.btnLocateNow].forEach(node => {
+                node.disabled = disabled;
+                node.classList.toggle('opacity-50', disabled);
+            });
+        }
+
+        function syncInputsFromState() {
+            el.inputHh.value = pad2(state.tc.hh);
+            el.inputMm.value = pad2(state.tc.mm);
+            el.inputSs.value = pad2(state.tc.ss);
+            el.inputFf.value = pad2(state.tc.ff);
+        }
+
+        function setFrameRate(newRateKey) {
+            if (!FRAME_RATES[newRateKey]) return;
+            state.rateKey = newRateKey;
+            const rate = getRateConfig();
+
+            // Update button active styles
+            el.fpsButtons.forEach(btn => {
+                const isMatch = btn.dataset.fps === newRateKey;
+                btn.classList.toggle('active', isMatch);
+                if (isMatch) {
+                    btn.className = 'fps-btn active hw-btn py-2 px-2 rounded-lg text-xs font-mono font-semibold border border-amber-500/60 bg-amber-500/15 text-amber-400';
+                } else {
+                    btn.className = 'fps-btn hw-btn py-2 px-2 rounded-lg text-xs font-mono font-semibold border border-studio-700 bg-studio-950 text-slate-400 hover:text-white';
+                }
+            });
+
+            // Update max frame input constraint & label
+            const maxFrame = rate.fps - 1;
+            el.inputFf.max = maxFrame;
+            el.labelInputFf.textContent = `FF (0-${maxFrame})`;
+            el.badgeFps.innerHTML = `RATE: <strong class="text-amber-400">${rate.label}</strong>`;
+
+            if (state.mode === 'manual') {
+                sanitizeManualTimecode();
+            } else {
+                state.tc = getWallClockTimecode();
+                updateTimecodeDisplay();
+            }
+
+            // Re-anchor timing if currently running
+            if (state.isRunning) {
+                state.qfPiece = 0;
+                state.seqBaseTc = { ...state.tc };
+                state.lastScheduledPerfMs = 0;
+                state.intervalErrorsMs = [];
+                state.nextEventAudioSec = getAudioTimeSec() + 0.025;
+                if (state.startSysExMode !== 'none') {
+                    sendMtcFullFrame(state.seqBaseTc);
+                }
+            }
+            updateRateControlsUI();
+        }
+
+        function setMode(newMode) {
+            state.mode = newMode;
+
+            if (newMode === 'tod') {
+                el.btnModeTod.className = 'py-2 px-3 rounded-lg text-xs font-semibold transition-all bg-studio-800 text-cyan-400 shadow';
+                el.btnModeManual.className = 'py-2 px-3 rounded-lg text-xs font-semibold transition-all text-slate-400 hover:text-slate-200';
+                
+                el.manualInputsContainer.classList.add('hidden');
+                el.todInfoContainer.classList.remove('hidden');
+                el.badgeMode.innerHTML = `SOURCE: <strong class="text-cyan-400">TIME OF DAY (LIVE)</strong>`;
+
+                // Start live wall-clock preview even when stopped
+                startTodPreviewLoop();
+                if (state.isRunning) {
+                    state.tc = getWallClockTimecode();
+                    sendMtcFullFrame(state.tc);
+                }
+            } else {
+                el.btnModeManual.className = 'py-2 px-3 rounded-lg text-xs font-semibold transition-all bg-studio-800 text-amber-400 shadow';
+                el.btnModeTod.className = 'py-2 px-3 rounded-lg text-xs font-semibold transition-all text-slate-400 hover:text-slate-200';
+                
+                el.todInfoContainer.classList.add('hidden');
+                el.manualInputsContainer.classList.remove('hidden');
+                el.badgeMode.innerHTML = `SOURCE: <strong class="text-slate-200">MANUAL GENERATOR</strong>`;
+
+                stopTodPreviewLoop();
+                sanitizeManualTimecode();
+                setManualInputsDisabled(state.isRunning);
+            }
+
+            updateTimecodeDisplay();
+        }
+
+        function startTodPreviewLoop() {
+            stopTodPreviewLoop();
+            const updatePreview = () => {
+                if (state.mode !== 'tod') return;
+                el.todDateStr.textContent = new Date().toLocaleDateString();
+                if (!state.isRunning) {
+                    state.tc = getWallClockTimecode();
+                    updateTimecodeDisplay();
+                }
+            };
+            updatePreview();
+            state.todPreviewTimerId = setInterval(updatePreview, 40);
+        }
+
+        function stopTodPreviewLoop() {
+            if (state.todPreviewTimerId) {
+                clearInterval(state.todPreviewTimerId);
+                state.todPreviewTimerId = null;
+            }
+        }
+
+        // ==========================================
+        // 8. MIDI HEX MONITOR LOGGING & HELPERS
+        // ==========================================
+        function logMidiBytes(bytes, label, isHighlight) {
+            state.msgCount++;
+            el.msgCounter.textContent = `${state.msgCount.toLocaleString()} msgs`;
+
+            const hexStr = bytes.map(b => b.toString(16).toUpperCase().padStart(2, '0')).join(' ');
+            const row = document.createElement('div');
+            row.className = isHighlight 
+                ? 'flex items-center justify-between text-amber-300 bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20' 
+                : 'flex items-center justify-between text-slate-400 px-2 py-0.2';
+
+            row.innerHTML = `
+                <span><span class="text-slate-500 mr-2">[${label}]</span><code class="text-slate-200">${hexStr}</code></span>
+                <span class="text-[10px] text-slate-600">${new Date().toISOString().slice(11, 23)}</span>
+            `;
+
+            // Remove initial placeholder if first message
+            if (state.msgCount === 1) {
+                el.midiLog.innerHTML = '';
+            }
+
+            el.midiLog.appendChild(row);
+
+            // Keep DOM log capped at 80 lines for smooth performance
+            while (el.midiLog.children.length > 80) {
+                el.midiLog.removeChild(el.midiLog.firstChild);
+            }
+
+            el.midiLog.scrollTop = el.midiLog.scrollHeight;
+        }
+
+        function showBanner(msg, showRetry) {
+            el.statusBannerText.textContent = msg;
+            el.statusBanner.classList.remove('hidden');
+            el.btnRetryMidi.classList.toggle('hidden', !showRetry);
+        }
+
+        function hideBanner() {
+            el.statusBanner.classList.add('hidden');
+        }
+
+        function updateMidiLed(isReady) {
+            el.ledMidiReady.className = isReady 
+                ? 'w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_#34c759]' 
+                : 'w-2.5 h-2.5 rounded-full bg-rose-500';
+        }
+
+        function flashLed(ledEl, activeClass, durationMs) {
+            ledEl.classList.remove('bg-slate-700');
+            ledEl.classList.add(activeClass);
+            setTimeout(() => {
+                ledEl.classList.remove(activeClass);
+                ledEl.classList.add('bg-slate-700');
+            }, durationMs);
+        }
+
+        function pad2(num) {
+            return String(Math.floor(Math.abs(num))).padStart(2, '0');
+        }
+
+        function clampInt(val, min, max) {
+            const parsed = parseInt(val, 10);
+            if (isNaN(parsed)) return min;
+            return Math.max(min, Math.min(max, parsed));
+        }
+
+        // ==========================================
+        // 9. EVENT BINDINGS & BOOTSTRAP
+        // ==========================================
+        el.midiSelect.addEventListener('change', (e) => {
+            state.selectedOutputId = e.target.value;
+        });
+
+        el.btnRefreshPorts.addEventListener('click', () => {
+            if (state.midiAccess) {
+                populateMidiOutputs();
+            } else {
+                initWebMIDI();
+            }
+        });
+
+        el.btnRetryMidi.addEventListener('click', initWebMIDI);
+
+        el.fpsButtons.forEach(btn => {
+            btn.addEventListener('click', () => setFrameRate(btn.dataset.fps));
+        });
+
+        el.btnModeManual.addEventListener('click', () => setMode('manual'));
+        el.btnModeTod.addEventListener('click', () => setMode('tod'));
+
+        [el.inputHh, el.inputMm, el.inputSs, el.inputFf].forEach(inp => {
+            inp.addEventListener('change', sanitizeManualTimecode);
+            inp.addEventListener('blur', sanitizeManualTimecode);
+        });
+
+        el.btnLocateNow.addEventListener('click', () => {
+            sanitizeManualTimecode();
+            sendMtcFullFrame(state.tc);
+        });
+
+        el.btnRun.addEventListener('click', startGenerator);
+        el.btnStop.addEventListener('click', stopGenerator);
+        el.btnZero.addEventListener('click', zeroAndClear);
+
+        // Rate & Anti-Jam Control Listeners
+        el.txModeSelect.addEventListener('change', (e) => {
+            state.txMode = e.target.value;
+            if (state.txMode === 'sysex-periodic' && state.customHzCap > 30) {
+                state.customHzCap = 10;
+            } else if (state.txMode === 'qf-throttled' && state.customHzCap < 30) {
+                state.customHzCap = 60;
+            }
+            if (state.isRunning) {
+                state.lastScheduledPerfMs = 0;
+                state.intervalErrorsMs = [];
+                state.nextEventAudioSec = getAudioTimeSec() + 0.010;
+            }
+            updateRateControlsUI();
+        });
+
+        el.rateSlider.addEventListener('input', (e) => {
+            const val = parseInt(e.target.value, 10) || 20;
+            if (state.txMode === 'hw-timestamped') {
+                state.lookaheadMs = val;
+            } else {
+                state.customHzCap = val;
+            }
+            updateRateControlsUI();
+        });
+
+        el.startSysExMode.addEventListener('change', (e) => {
+            state.startSysExMode = e.target.value;
+        });
+
+        el.chkLogQf.addEventListener('change', (e) => {
+            state.logQuarterFrames = e.target.checked;
+        });
+
+        el.btnClearLog.addEventListener('click', () => {
+            state.msgCount = 0;
+            el.msgCounter.textContent = '0 msgs';
+            el.midiLog.innerHTML = '<div class="text-slate-500 italic">Log cleared.</div>';
+        });
+
+        // Keyboard shortcut: Spacebar toggles Run/Stop when not typing in an input
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'SELECT') {
+                e.preventDefault();
+                if (state.isRunning) {
+                    stopGenerator();
+                } else {
+                    startGenerator();
+                }
+            }
+        });
+
+        // Initialize on page load
+        window.addEventListener('DOMContentLoaded', () => {
+            setFrameRate('30');
+            setMode('manual');
+            updateRateControlsUI();
+            startTelemetryLoop();
+            initWebMIDI();
+        });
+    </script>
+</body>
+</html>
